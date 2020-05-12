@@ -29,7 +29,7 @@ async def post(session, url, data):
 
 class ConqueryConnection(object):
     async def __aenter__(self):
-        self._session = ClientSession()
+        self._session = ClientSession(headers=self._headers)
         # try to fail early if conquery is not available at self._url
         if self._check_connection:
             try:
@@ -42,10 +42,13 @@ class ConqueryConnection(object):
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self._session.close()
 
-    def __init__(self, url, requests_timout=5, check_connection = True):
+    def __init__(self, url, token, requests_timout=5, check_connection = True):
         self._url = url.strip('/')
         self._check_connection = check_connection
         self._timeout = requests_timout
+        self._token = token
+        self._headers = {"Authorization": "Bearer {}".format(token)}
+
 
     async def get_datasets(self):
         response_list = await get(self._session, f"{self._url}/api/datasets")
@@ -74,7 +77,11 @@ class ConqueryConnection(object):
 
     async def execute_query(self, dataset, query):
         result = await post(self._session, f"{self._url}/api/datasets/{dataset}/queries", query)
-        return result["id"]
+        try:
+            print(result)
+            return result['id']
+        except KeyError:
+            raise ValueError("Error encountered when executing query", result.get('message'), result.get('details'))
 
     async def get_query_result(self, dataset, query_id):
         """ Returns results for given query.
@@ -92,7 +99,7 @@ class ConqueryConnection(object):
         return list(csv.reader(result_string.splitlines(), delimiter=';'))
 
     async def _download_query_results(self, url):
-        return await get_text(self._session, url)
+        return await get_text(self._session, url+"?access_token={}".format(self._token))
 
     async def create_concept_query_with_selects(self, dataset: str, concept_id: str, selects: list=None):
         concepts = await self.get_concepts(dataset)

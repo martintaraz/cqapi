@@ -71,8 +71,8 @@ def selects_per_concept(concepts: dict):
     return {concept_id: [select_dict.get('id') for select_dict in concept.get('selects', [])] for (concept_id, concept) in concepts.items()}
 
 
-def add_selects_to_concept_query(query, target_concept_id: str, selects: list, ):
-    """ Add select-ids to CONCEPT nodes in CONCEPT_QUERYs.
+def add_selects_to_concept_query(query, target_concept_id: str, selects: list):
+    """ Add select ids to CONCEPT nodes in queries.
 
     :param query: query to add selects to.
     :param target_concept_id: CONCEPT's id to which the selects should be added.
@@ -86,7 +86,7 @@ def add_selects_to_concept_query(query, target_concept_id: str, selects: list, )
     query_object = deepcopy(query)
 
     query_object_node_type = query_object.get('type')
-    if query_object_node_type == 'CONCEPT_QUERY':
+    if query_object_node_type == 'CONCEPT_QUERY' or query_object_node_type == 'RELATIVE_FORM_QUERY':
         query_object['root'] = add_selects_to_concept_query(query_object.get('root'), target_concept_id, selects)
         return query_object
     elif query_object_node_type == 'AND':
@@ -116,14 +116,24 @@ def add_selects_to_concept_query(query, target_concept_id: str, selects: list, )
 
 
 def add_date_restriction_to_concept_query(query, target_concept_id: str, date_start: date, date_end: date):
+    """ Add (absolute) date restriction to a query.
+
+    Adds the date restriction directly above all occurrences of the target_concept_id in the query object.
+
+    :param query: Query to add date restriction to.
+    :param target_concept_id: Id of concept node in query above which the date restriction node should be added.
+    :param date_start: Start-date of the date restriction.
+    :param date_end: End-date of the date restriction.
+    :return:
+    """
     query_object = deepcopy(query)
 
     if type(date_start) is not date:
-        start = date.fromisoformat(date_start)
+        start = _parse_iso_date(date_start)
     else:
         start = date_start
     if type(date_end) is not date:
-        end = date.fromisoformat(date_end)
+        end = _parse_iso_date(date_end)
     else:
         end = date_end
     if (end - start).days < 0:
@@ -210,15 +220,68 @@ def add_subquery_to_concept_query(query, subquery):
     if query_object_node_type == 'CONCEPT_QUERY':
         query_object['root'] = add_subquery_to_concept_query(query_object.get('root'), subquery)
         return query_object
-    elif query_object_node_type == 'AND':
+    elif query_object_node_type == 'OR':
         query_object['children'].append(subquery)
         return query_object
     else:
         query = {
-            "type": "AND",
+            "type": "OR",
             "children": [
                 query_object,
                 subquery
             ]
         }
         return query
+
+
+def create_relative_query(index_query, before_query, after_query, time_before, time_after,
+                          index_selector='EARLIEST', index_placement='NEUTRAL', time_unit='QUARTERS'):
+    """ Create a RELATIVE_FORM_QUERY for temporally relative data export.
+
+    :param index_query: Concept query describing the event that is to be used as the index date
+    :param before_query: Concept query to select which information will be requested for the time frame before the index
+        date
+    :param after_query: Concept query to select which information will be requested for time frame after the index date
+    :param time_before: Number of time units (see `time_unit`) before the index date to consider using the
+        `before_query`
+    :param time_after: Number of time units (see `time_unit`) after the index date to consider using the `after_query`
+    :param index_selector: One of `'FIRST'` (default), `'LAST'`, and `'RANDOM'`. Selects which index date to use in
+        case `index_query` matches multiple event occurrences
+    :param index_placement: One of `'BEFORE'`, `'NEUTRAL'` (default), and `'AFTER'`. Selects if the index event
+        should be considered for either of the before or after time frames' results
+    :param time_unit: One of `'QUARTERS'` (default) and `'DAYS'`. Time unit of `time_before` and `time_after`
+        respectively
+    :return:
+    """
+    valid_time_units = ['QUARTERS', 'DAYS']
+    valid_index_selectors = ['EARLIEST', 'LATEST', 'RANDOM']
+    valid_index_placements = ['BEFORE', 'NEUTRAL', 'AFTER']
+
+    if time_unit not in valid_time_units:
+        raise ValueError(f"Invalid time_unit. Must be one of {valid_time_units}")
+    if time_before < 0:
+        raise ValueError("Invalid time_before. Must be positive")
+    if time_after < 0:
+        raise ValueError("Invalid time_after. Must be positive")
+    if index_selector not in valid_index_selectors:
+        raise ValueError(f"Invalid index_selector. Must be one of {valid_index_selectors}")
+    if index_placement not in valid_index_placements:
+        raise ValueError(f"Invalid index_placement. Must be one of {valid_index_placements}")
+
+    return {
+        'type': 'RELATIVE_FORM_QUERY',
+        'query': index_query,
+        'features': {'type': "ARRAY_CONCEPT_QUERY", 'childQueries': [before_query]},
+        'outcomes': {'type': "ARRAY_CONCEPT_QUERY", 'childQueries': [after_query]},
+        'indexSelector': index_selector,
+        'indexPlacement': index_placement,
+        'timeCountBefore': time_before,
+        'timeCountAfter': time_after,
+        'timeUnit': time_unit,
+        'resolutions': ["COMPLETE", "QUARTERS"]
+    }
+
+                        
+def _parse_iso_date(datestring: str):
+    y, m, d = map(lambda x: int(x), datestring.split('-'))
+    return date(y, m, d)
